@@ -5,10 +5,28 @@
 import * as Sentry from "@sentry/nextjs";
 
 Sentry.init({
-  dsn: "https://f5d73f6d72e0ee1698cd1ce23cde4ede@o87286.ingest.us.sentry.io/4508968118321152",
+  dsn: "https://608254685e9be6a005544c381bdeacdd@o4510869377187840.ingest.us.sentry.io/4510869378105344",
 
   // Add optional integrations for additional features
-  integrations: [Sentry.replayIntegration()],
+  integrations: [
+    Sentry.replayIntegration({
+      // Privacy settings for chat conversations
+      mask: ['.chat-message-content', '[data-sensitive]'],
+      block: ['.chat-input-area'],
+
+      // Capture canvas for better window rendering
+      recordCanvas: true,
+
+      // Network details for debugging chat API calls
+      networkDetailAllowUrls: ['/api/chat'],
+      networkCaptureBodies: true,
+      networkRequestHeaders: ['Content-Type'],
+      networkResponseHeaders: ['Content-Type'],
+
+      // Capture console logs for debugging
+      consoleLogAllowUrls: ['/api/chat']
+    })
+  ],
 
   // Define how likely traces are sampled. Adjust this value in production, or use tracesSampler for greater control.
   tracesSampleRate: 1,
@@ -26,6 +44,22 @@ Sentry.init({
   // Enable sending user PII (Personally Identifiable Information)
   // https://docs.sentry.io/platforms/javascript/guides/nextjs/configuration/options/#sendDefaultPii
   sendDefaultPii: true,
+
+  // Add custom context about desktop state before sending
+  beforeSend(event) {
+    // Add context about active windows
+    if (typeof window !== 'undefined') {
+      const windowManager = (window as any).__WINDOW_MANAGER_STATE__
+      if (windowManager) {
+        event.contexts = event.contexts || {}
+        event.contexts.desktop = {
+          active_windows: windowManager.windows?.length || 0,
+          focused_window: windowManager.windows?.find((w: any) => w.isFocused)?.id
+        }
+      }
+    }
+    return event
+  }
 });
 
 export const onRouterTransitionStart = Sentry.captureRouterTransitionStart;

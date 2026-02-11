@@ -6,6 +6,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import { useSentryMetrics, useSentryBreadcrumbs } from '@/lib/hooks'
 
 interface Message {
   id: string
@@ -58,6 +59,11 @@ export function Chat() {
   const [currentTool, setCurrentTool] = useState<ToolStatus | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const toolStartTimeRef = useRef<Record<string, number>>({})
+
+  // Initialize observability hooks
+  const metrics = useSentryMetrics()
+  const breadcrumbs = useSentryBreadcrumbs()
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -82,6 +88,10 @@ export function Chat() {
     setInput('')
     setIsLoading(true)
     setCurrentTool(null)
+
+    // Track message sent
+    metrics.trackChatMessageSent()
+    breadcrumbs.logChatMessageSent(userMessage.content)
 
     try {
       const response = await fetch('/api/chat', {
@@ -137,14 +147,25 @@ export function Chat() {
               if (parsed.type === 'text_delta') {
                 // Append streaming text
                 streamingContent += parsed.text
+
+                // If there was a tool running, mark it as complete
+                if (currentTool && toolStartTimeRef.current[currentTool.name]) {
+                  const duration = Date.now() - toolStartTimeRef.current[currentTool.name]
+                  metrics.trackToolExecution(currentTool.name, duration, true)
+                  breadcrumbs.logToolComplete(currentTool.name, duration)
+                  delete toolStartTimeRef.current[currentTool.name]
+                }
+
                 setCurrentTool(null) // Clear tool status when text starts flowing
                 // Update the streaming message
-                setMessages(prev => prev.map(msg => 
-                  msg.id === streamingMessageId 
+                setMessages(prev => prev.map(msg =>
+                  msg.id === streamingMessageId
                     ? { ...msg, content: streamingContent }
                     : msg
                 ))
               } else if (parsed.type === 'tool_start') {
+                toolStartTimeRef.current[parsed.tool] = Date.now()
+                breadcrumbs.logToolStart(parsed.tool)
                 setCurrentTool({
                   name: parsed.tool,
                   status: 'running'
@@ -155,11 +176,15 @@ export function Chat() {
                   elapsed: parsed.elapsed
                 } : null)
               } else if (parsed.type === 'done') {
+                // Track message received
+                metrics.trackChatMessageReceived(streamingContent.length)
+                breadcrumbs.logChatMessageReceived(streamingContent.length)
                 setCurrentTool(null)
               } else if (parsed.type === 'error') {
+                breadcrumbs.logChatError(parsed.message || 'Unknown error')
                 streamingContent = 'Sorry, I encountered an error processing your request.'
-                setMessages(prev => prev.map(msg => 
-                  msg.id === streamingMessageId 
+                setMessages(prev => prev.map(msg =>
+                  msg.id === streamingMessageId
                     ? { ...msg, content: streamingContent }
                     : msg
                 ))
@@ -176,7 +201,9 @@ export function Chat() {
       if (!streamingContent) {
         setMessages(prev => prev.filter(msg => msg.id !== streamingMessageId))
       }
-    } catch {
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error'
+      breadcrumbs.logChatError(errorMsg)
       const errorMessage: Message = {
         id: crypto.randomUUID(),
         role: 'assistant',
@@ -223,11 +250,12 @@ export function Chat() {
               )}
             </div>
             <div
-              className={`max-w-[80%] rounded-lg px-3 py-2 ${
+              className={`max-w-[80%] rounded-lg px-3 py-2 chat-message-content ${
                 message.role === 'user'
                   ? 'bg-[#ff45a8]/10 text-[#e8e4f0]'
                   : 'bg-[#2a2438] text-[#e8e4f0]'
               }`}
+              data-sensitive={message.role === 'user' ? 'true' : undefined}
             >
               <div className="text-sm chat-markdown">
                 <ReactMarkdown
@@ -355,9 +383,10 @@ export function Chat() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Type a message..."
-            className="flex-1 bg-[#1e1a2a] text-[#e8e4f0] text-sm rounded px-3 py-2 border border-[#362552] focus:border-[#7553ff] focus:outline-none resize-none placeholder:text-[#9086a3]"
+            className="chat-input-area flex-1 bg-[#1e1a2a] text-[#e8e4f0] text-sm rounded px-3 py-2 border border-[#362552] focus:border-[#7553ff] focus:outline-none resize-none placeholder:text-[#9086a3]"
             rows={2}
             disabled={isLoading}
+            data-sensitive="true"
           />
           <button
             type="submit"

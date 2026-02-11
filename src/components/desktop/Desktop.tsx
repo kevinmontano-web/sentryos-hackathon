@@ -8,6 +8,8 @@ import { Notepad } from './apps/Notepad'
 import { FolderView, FolderItem } from './apps/FolderView'
 import { Chat } from './apps/Chat'
 import { useState } from 'react'
+import { useSentryBreadcrumbs } from '@/lib/hooks'
+import { WindowManagerErrorBoundary, ChatErrorBoundary } from './errors'
 
 const INSTALL_GUIDE_CONTENT = `# SentryOS Install Guide
 
@@ -58,6 +60,9 @@ function DesktopContent() {
   const { windows, openWindow } = useWindowManager()
   const [selectedIcon, setSelectedIcon] = useState<string | null>(null)
 
+  // Initialize observability hooks
+  const breadcrumbs = useSentryBreadcrumbs()
+
   const openInstallGuide = () => {
     openWindow({
       id: 'install-guide',
@@ -88,7 +93,11 @@ function DesktopContent() {
       minHeight: 400,
       isMinimized: false,
       isMaximized: false,
-      content: <Chat />
+      content: (
+        <ChatErrorBoundary>
+          <Chat />
+        </ChatErrorBoundary>
+      )
     })
   }
 
@@ -112,6 +121,7 @@ function DesktopContent() {
   }
 
   const handleDesktopClick = () => {
+    breadcrumbs.logDesktopClick()
     setSelectedIcon(null)
   }
 
@@ -172,8 +182,10 @@ function DesktopContent() {
 
 export function Desktop() {
   return (
-    <WindowManagerProvider>
-      <DesktopContent />
-    </WindowManagerProvider>
+    <WindowManagerErrorBoundary>
+      <WindowManagerProvider>
+        <DesktopContent />
+      </WindowManagerProvider>
+    </WindowManagerErrorBoundary>
   )
 }
